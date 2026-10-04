@@ -1,0 +1,11 @@
+numpy
+scipy
+pandas
+networkx
+requests
+osmnx>=1.9        # OpenStreetMap download (needs internet the first time)
+streamlit>=1.30   # dashboard
+ortools           # optional: external OR-Tools baseline
+pytest            # optional: run the tests
+python-dotenv     # environment variable management (.env)
+vrplib            # CVRPLIB instance support
