@@ -59,7 +59,7 @@ class RoadNet:
 
     # ------------------------------------------------------------------ loaders
     @classmethod
-    def from_osm(cls, place=None, center=None, radius_m=2500, cache_dir="data/cache", label=None):
+    def from_osm(cls, place=None, center=None, radius_m=2500, cache_dir="data/cache", label=None, **kwargs):
         """Download the drivable network from OpenStreetMap with OSMnx (internet required)."""
         import osmnx as ox
         os.makedirs(cache_dir, exist_ok=True)

@@ -118,7 +118,12 @@ with st.sidebar:
     if st.button("Load network", type="primary"):
         with st.spinner("Loading road network..."):
             try:
-                S.net = synthetic_city() if src.startswith("Offline") else RoadNet.from_osm(place=place, center=center, radius_m=radius, label=label_name)
+                if src.startswith("Offline"):
+                    S.net = synthetic_city()
+                else:
+                    S.net = RoadNet.from_osm(place=place, center=center, radius_m=radius)
+                    if label_name:
+                        S.net.label = label_name
                 S.pop("planner", None); S.pop("bench", None)
             except Exception as e:
                 st.error(f"Could not load the network: {e}")
