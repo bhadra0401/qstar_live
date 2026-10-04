@@ -13,22 +13,112 @@ st.set_page_config(page_title="Q-STAR live traffic routing", layout="wide")
 S = st.session_state
 st.title("Q-STAR: quantum-inspired routing on real roads with live traffic")
 
+@st.cache_data(ttl=3600)
+def search_places(query, api_key=None):
+    """Search locations by keyword or place name with auto-complete (TomTom & OSM)."""
+    if not query or len(query.strip()) < 2:
+        return []
+    import urllib.parse
+    import requests
+    # 1. First try TomTom Search API if key available (fast, rich address metadata)
+    if api_key:
+        try:
+            url = f"https://api.tomtom.com/search/2/search/{urllib.parse.quote(query)}.json"
+            r = requests.get(url, params={"key": api_key, "limit": 6}, timeout=3)
+            if r.status_code == 200:
+                results = []
+                for item in r.json().get("results", []):
+                    pos = item.get("position", {})
+                    addr = item.get("address", {}).get("freeformAddress", "")
+                    poi = item.get("poi", {}).get("name", "")
+                    title = f"{poi} - {addr}" if poi and poi not in addr else (addr or poi)
+                    if pos.get("lat") and pos.get("lon"):
+                        results.append({"name": title, "lat": float(pos["lat"]), "lon": float(pos["lon"])})
+                if results:
+                    return results
+        except Exception:
+            pass
+    # 2. Fallback to OpenStreetMap Nominatim
+    try:
+        headers = {"User-Agent": "QStarRoutingSIH/1.0"}
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "json", "limit": 6, "addressdetails": 1},
+            headers=headers,
+            timeout=3
+        )
+        if r.status_code == 200:
+            return [{"name": item["display_name"], "lat": float(item["lat"]), "lon": float(item["lon"])} for item in r.json()]
+    except Exception:
+        pass
+    return []
+
+
+PRESETS = {
+    "Indiranagar, Bengaluru": (12.9733, 77.6405),
+    "Marathahalli, Bengaluru": (12.9553, 77.6984),
+    "Koramangala, Bengaluru": (12.9352, 77.6245),
+    "Whitefield, Bengaluru": (12.9698, 77.7500),
+    "HSR Layout, Bengaluru": (12.9121, 77.6446),
+    "Connaught Place, New Delhi": (28.6315, 77.2167),
+    "Bandra West, Mumbai": (19.0596, 72.8295),
+    "Cyber City, Gurugram": (28.4950, 77.0895),
+    "Hitech City, Hyderabad": (17.4474, 78.3762),
+    "Lower Manhattan, New York": (40.7128, -74.0060),
+    "Central London, UK": (51.5074, -0.1278),
+    "Marina Bay, Singapore": (1.2868, 103.8545),
+}
+
 # ------------------------------------------------------------------ sidebar
 with st.sidebar:
     st.header("1. Road network")
-    src = st.radio("Source", ["OpenStreetMap: place name", "OpenStreetMap: lat/lon + radius", "Offline synthetic demo (NOT real)"])
-    if src.startswith("OpenStreetMap: place"):
-        place = st.text_input("Place", "Indiranagar, Bengaluru, India"); center = None; radius = 0
-    elif "lat/lon" in src:
-        place = None; c1, c2 = st.columns(2)
-        lat0 = c1.number_input("Lat", value=12.9716, format="%.5f"); lon0 = c2.number_input("Lon", value=77.5946, format="%.5f")
-        radius = st.slider("Radius (m)", 1000, 6000, 2500, 250); center = (lat0, lon0)
+    src = st.radio("Search Mode", [
+        "🔍 Live Location Search (Auto-Suggest)",
+        "⚡ Popular City Presets",
+        "📍 Custom Lat / Lon & Radius",
+        "Offline synthetic demo (NOT real)"
+    ])
+    
+    place = None; center = None; radius = 2000; label_name = None
+    default_key = os.environ.get("TOMTOM_API_KEY", "")
+    
+    if src.startswith("🔍 Live Location Search"):
+        query = st.text_input("Type place, area, or landmark", "Indiranagar, Bengaluru")
+        results = search_places(query, api_key=default_key)
+        if results:
+            opts = [f"📍 {r['name'][:55]}..." if len(r['name']) > 55 else f"📍 {r['name']}" for r in results]
+            idx = st.selectbox("Matching locations (Google/Apple Maps style)", range(len(opts)), format_func=lambda i: opts[i])
+            chosen = results[idx]
+            center = (chosen["lat"], chosen["lon"])
+            parts = [p.strip() for p in chosen["name"].split(",")]
+            label_name = f"{parts[0]}, {parts[-1]}" if len(parts) > 1 else parts[0]
+            st.caption(f"Coordinates: `{chosen['lat']:.4f}, {chosen['lon']:.4f}`")
+        else:
+            st.warning("Type a location above to see real-time suggestions.")
+            center = (12.9733, 77.6405); label_name = query
+        radius = st.slider("Road network radius (meters)", 800, 5000, 2000, 200)
+        
+    elif src.startswith("⚡ Popular City Presets"):
+        choice = st.selectbox("Select target area", list(PRESETS.keys()))
+        center = PRESETS[choice]
+        label_name = choice
+        radius = st.slider("Road network radius (meters)", 800, 5000, 2000, 200)
+        st.caption(f"Coordinates: `{center[0]:.4f}, {center[1]:.4f}`")
+        
+    elif src.startswith("📍 Custom Lat"):
+        c1, c2 = st.columns(2)
+        lat0 = c1.number_input("Lat", value=12.9716, format="%.5f")
+        lon0 = c2.number_input("Lon", value=77.5946, format="%.5f")
+        radius = st.slider("Radius (meters)", 800, 6000, 2500, 250)
+        center = (lat0, lon0)
+        label_name = f"{lat0:.4f}, {lon0:.4f} (r={radius}m)"
     else:
         place = center = None; radius = 0
+
     if st.button("Load network", type="primary"):
         with st.spinner("Loading road network..."):
             try:
-                S.net = synthetic_city() if src.startswith("Offline") else RoadNet.from_osm(place, center, radius)
+                S.net = synthetic_city() if src.startswith("Offline") else RoadNet.from_osm(place=place, center=center, radius_m=radius, label=label_name)
                 S.pop("planner", None); S.pop("bench", None)
             except Exception as e:
                 st.error(f"Could not load the network: {e}")

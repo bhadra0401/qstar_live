@@ -59,7 +59,7 @@ class RoadNet:
 
     # ------------------------------------------------------------------ loaders
     @classmethod
-    def from_osm(cls, place=None, center=None, radius_m=2500, cache_dir="data/cache"):
+    def from_osm(cls, place=None, center=None, radius_m=2500, cache_dir="data/cache", label=None):
         """Download the drivable network from OpenStreetMap with OSMnx (internet required)."""
         import osmnx as ox
         os.makedirs(cache_dir, exist_ok=True)
@@ -73,7 +73,7 @@ class RoadNet:
             if place: G = ox.graph_from_place(place, network_type="drive")
             else: G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
             save(G, path)
-        return cls(G, label=place or f"{center[0]:.4f},{center[1]:.4f} r={radius_m}m")
+        return cls(G, label=label or place or f"{center[0]:.4f},{center[1]:.4f} r={radius_m}m")
 
     def nearest_node(self, lat, lon):
         _, i = self._tree.query([lat, lon * np.cos(np.radians(self.lat.mean()))]); return int(i)
