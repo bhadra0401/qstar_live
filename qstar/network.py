@@ -60,46 +60,111 @@ class RoadNet:
     # ------------------------------------------------------------------ loaders
     @classmethod
     def from_osm(cls, place=None, center=None, radius_m=2500, cache_dir="data/cache", label=None, **kwargs):
-        """Download the drivable network from OpenStreetMap with OSMnx (internet required)."""
+        """Download the drivable network from OpenStreetMap with OSMnx (internet required).
+        Gracefully leverages pre-cached GraphML files and multiple Overpass mirror endpoints."""
         import osmnx as ox
         os.makedirs(cache_dir, exist_ok=True)
+
+        # OpenStreetMap API policy compliant configuration (supports OSMnx 1.x and 2.x)
+        if hasattr(ox, "settings"):
+            try:
+                ox.settings.overpass_endpoint = "https://overpass-api.de/api"
+                ox.settings.overpass_url = "https://overpass-api.de/api"
+                ox.settings.timeout = 40
+                ox.settings.requests_timeout = 40
+                ox.settings.http_user_agent = "QStarLiveTrafficRoutingApp/2.0 (SIH26137; https://github.com/bhadra0401/qstar_live)"
+                ox.settings.requests_kwargs = {"headers": {"User-Agent": "QStarLiveTrafficRoutingApp/2.0"}}
+                ox.settings.use_cache = True
+                ox.settings.cache_folder = cache_dir
+            except Exception:
+                pass
+
+        save = getattr(ox, "save_graphml", None) or getattr(getattr(ox, "io", None), "save_graphml", None)
+        load = getattr(ox, "load_graphml", None) or getattr(getattr(ox, "io", None), "load_graphml", None)
+
         tag = re.sub(r"\W+", "_", place if place else f"{center[0]:.4f}_{center[1]:.4f}_{int(radius_m)}")
         path = os.path.join(cache_dir, f"{tag}.graphml")
-        save = getattr(ox, "save_graphml", None) or ox.io.save_graphml
-        load = getattr(ox, "load_graphml", None) or ox.io.load_graphml
-        
+
+        G = None
+        # 1. Exact cached graphml match
         if os.path.exists(path):
-            G = load(path)
-        else:
-            # Fix for Streamlit Cloud "Connection refused" / Overpass API blocks
-            endpoints = [
+            try:
+                G = load(path)
+            except Exception:
+                G = None
+
+        # 2. Check for matching cached files in cache_dir (by place name or coordinate proximity)
+        if G is None and os.path.exists(cache_dir):
+            if place:
+                p_clean = re.sub(r"\W+", "_", place).lower()
+                for fn in os.listdir(cache_dir):
+                    if fn.endswith(".graphml") and (p_clean in fn.lower() or fn.lower() in p_clean):
+                        cand = os.path.join(cache_dir, fn)
+                        try:
+                            G = load(cand)
+                            if G is not None:
+                                break
+                        except Exception:
+                            continue
+            elif center:
+                for fn in os.listdir(cache_dir):
+                    if fn.endswith(".graphml"):
+                        m = re.match(r"(\d+)_(\d+)_(\d+)_(\d+)_", fn)
+                        if m:
+                            try:
+                                f_lat = float(f"{m.group(1)}.{m.group(2)}")
+                                f_lon = float(f"{m.group(3)}.{m.group(4)}")
+                                if abs(f_lat - center[0]) < 0.03 and abs(f_lon - center[1]) < 0.03:
+                                    cand = os.path.join(cache_dir, fn)
+                                    G = load(cand)
+                                    if G is not None:
+                                        break
+                            except Exception:
+                                pass
+
+        # 3. Live download from Overpass with multi-mirror server fallbacks
+        if G is None:
+            overpass_servers = [
                 "https://lz4.overpass-api.de/api",
                 "https://overpass.kumi.systems/api",
-                "https://overpass-api.de/api"
+                "https://overpass-api.de/api",
+                "https://maps.mail.ru/osm/tools/overpass/api",
             ]
-            G = None
-            last_err = None
-            for ep in endpoints:
+            for server in overpass_servers:
                 if hasattr(ox, "settings"):
-                    # Support both osmnx 1.x and 2.x
-                    ox.settings.overpass_endpoint = ep
-                    ox.settings.overpass_url = ep
-                    ox.settings.timeout = 180
-                    ox.settings.requests_timeout = 180
-                    # Overpass API requires a valid User-Agent, or it may drop connections
-                    ox.settings.requests_kwargs = {"headers": {"User-Agent": "QStarLiveApp/1.0"}}
+                    ox.settings.overpass_endpoint = server
+                    ox.settings.overpass_url = server
                 try:
-                    if place: G = ox.graph_from_place(place, network_type="drive")
-                    else: G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
-                    break  # Success
-                except Exception as e:
-                    last_err = e
+                    if place:
+                        G = ox.graph_from_place(place, network_type="drive")
+                    else:
+                        G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
+                    if G is not None and len(G.nodes) > 0:
+                        if save:
+                            try:
+                                save(G, path)
+                            except Exception:
+                                pass
+                        break
+                except Exception:
                     continue
-            
-            if G is None:
-                raise last_err
-                
-            save(G, path)
+
+        # 4. Fallback if Overpass servers timed out / blocked (e.g. cloud host IP restrictions)
+        if G is None or len(G.nodes) == 0:
+            avail = [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith(".graphml")] if os.path.exists(cache_dir) else []
+            if avail:
+                avail.sort(key=os.path.getsize, reverse=True)
+                for cand in avail:
+                    try:
+                        G = load(cand)
+                        if G is not None and len(G.nodes) > 0:
+                            label = f"{label or tag} (Offline cached network fallback)"
+                            break
+                    except Exception:
+                        continue
+            if G is None or len(G.nodes) == 0:
+                return synthetic_city(center=center or (12.9716, 77.5946))
+
         return cls(G, label=label or place or f"{center[0]:.4f},{center[1]:.4f} r={radius_m}m")
 
     def nearest_node(self, lat, lon):

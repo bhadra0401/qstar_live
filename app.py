@@ -115,15 +115,16 @@ with st.sidebar:
     else:
         place = center = None; radius = 0
 
+    @st.cache_resource(show_spinner=False)
+    def load_road_network(src_mode, place_val, center_val, radius_val, label_val):
+        if src_mode.startswith("Offline"):
+            return synthetic_city()
+        return RoadNet.from_osm(place=place_val, center=center_val, radius_m=radius_val, label=label_val)
+
     if st.button("Load network", type="primary"):
-        with st.spinner("Loading road network..."):
+        with st.spinner(f"Loading road network ({label_name or 'selected area'})..."):
             try:
-                if src.startswith("Offline"):
-                    S.net = synthetic_city()
-                else:
-                    S.net = RoadNet.from_osm(place=place, center=center, radius_m=radius)
-                    if label_name:
-                        S.net.label = label_name
+                S.net = load_road_network(src, place, center, radius, label_name)
                 S.pop("planner", None); S.pop("bench", None)
             except Exception as e:
                 st.error(f"Could not load the network: {e}")
@@ -158,10 +159,13 @@ def make_provider():
     return FreeFlowProvider()
 
 
+if "net" not in S or S.net is None:
+    try:
+        S.net = load_road_network("⚡ Popular City Presets", None, PRESETS["Indiranagar, Bengaluru"], 2000, "Indiranagar, Bengaluru")
+    except Exception:
+        S.net = synthetic_city()
+
 net = S.get("net")
-if net is None:
-    st.info("Choose a road network in the sidebar and press **Load network**. The first OpenStreetMap download needs internet and is cached afterwards.")
-    st.stop()
 if net.synthetic: st.warning("Synthetic offline city: for testing only, not real-world data.")
 st.caption(f"Network: **{net.label}** - {net.N:,} junctions, {net.E:,} directed road segments")
 
