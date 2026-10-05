@@ -67,11 +67,33 @@ class RoadNet:
         path = os.path.join(cache_dir, f"{tag}.graphml")
         save = getattr(ox, "save_graphml", None) or ox.io.save_graphml
         load = getattr(ox, "load_graphml", None) or ox.io.load_graphml
+        
         if os.path.exists(path):
             G = load(path)
         else:
-            if place: G = ox.graph_from_place(place, network_type="drive")
-            else: G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
+            # Fix for Streamlit Cloud "Connection refused" / Overpass API blocks
+            endpoints = [
+                "https://lz4.overpass-api.de/api",
+                "https://overpass.kumi.systems/api",
+                "https://overpass-api.de/api"
+            ]
+            G = None
+            last_err = None
+            for ep in endpoints:
+                if hasattr(ox, "settings"):
+                    ox.settings.overpass_endpoint = ep
+                    ox.settings.timeout = 180
+                try:
+                    if place: G = ox.graph_from_place(place, network_type="drive")
+                    else: G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
+                    break  # Success
+                except Exception as e:
+                    last_err = e
+                    continue
+            
+            if G is None:
+                raise last_err
+                
             save(G, path)
         return cls(G, label=label or place or f"{center[0]:.4f},{center[1]:.4f} r={radius_m}m")
 
