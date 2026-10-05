@@ -81,8 +81,13 @@ class RoadNet:
             last_err = None
             for ep in endpoints:
                 if hasattr(ox, "settings"):
+                    # Support both osmnx 1.x and 2.x
                     ox.settings.overpass_endpoint = ep
+                    ox.settings.overpass_url = ep
                     ox.settings.timeout = 180
+                    ox.settings.requests_timeout = 180
+                    # Overpass API requires a valid User-Agent, or it may drop connections
+                    ox.settings.requests_kwargs = {"headers": {"User-Agent": "QStarLiveApp/1.0"}}
                 try:
                     if place: G = ox.graph_from_place(place, network_type="drive")
                     else: G = ox.graph_from_point(center, dist=radius_m, network_type="drive")
